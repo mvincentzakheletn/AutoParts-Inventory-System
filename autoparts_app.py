@@ -109,42 +109,72 @@ elif choice == "Monthly Report":
     st.write("Summary Table", df_sales)
 
 elif choice == "Inventory Management":
-    st.subheader("📦 Stock Control")
+    st.subheader("📦 Stock Control Center")
     tab1, tab2 = st.tabs(["Restock Existing Item", "Add New Product"])
 
     with tab1:
-        st.write("Increase stock levels for items already in the system.")
-        parts_df = pd.read_sql("SELECT PartName, StockQty FROM Parts", engine)
-        part_to_restock = st.selectbox("Select Part to Restock", parts_df['PartName'].tolist())
-        add_qty = st.number_input("Amount to Add", min_value=1, value=10)
+        col1, col2 = st.columns([2, 1]) 
+        
+        with col1:
+            st.write("### 📋 Current Inventory Overview")
+            
+            stock_df = pd.read_sql("SELECT PartName, CarModel, StockQTY, Price FROM Parts", engine)
+            
+            def highlight_low(s):
+                return ['color: red; font-weight: bold' if v < 10 else '' for v in s]
 
-        if st.button("Update Stock"):
-            with engine.begin() as conn:
-                conn.execute(
-                    sa.text("UPDATE Parts SET StockQty = StockQty + :q WHERE PartName = :p"),
-                    {"q": add_qty, "p": part_to_restock}
-                )
-            st.success(f"✅ Added {add_qty} units to {part_to_restock}!")
-            st.rerun()
+            st.dataframe(
+                stock_df.style
+                .format({"Price": "R {:.2f}"}) 
+                .apply(highlight_low, subset=['StockQTY']), 
+                use_container_width=True
+            )
+
+        with col2:
+            st.write("### ➕ Update Stock")
+            st.info("Select an item from the list to increase quantity.")
+            
+            stock_df['DisplayName'] = stock_df['PartName'] + " (" + stock_df['CarModel'] + ")"
+            part_list = stock_df['DisplayName'].tolist()
+            
+            selected_display_name = st.selectbox("Select Part to Restock", part_list)
+            add_qty = st.number_input("Quantity to Add", min_value=1, value=10)
+
+            if st.button("Confirm Restock"):
+                part_name = selected_display_name.split(" (")[0]
+                car_model = selected_display_name.split(" (")[1].replace(")", "")
+
+                with engine.begin() as conn:
+                    conn.execute(
+                        sa.text("UPDATE Parts SET StockQty = StockQty + :q WHERE PartName = :p AND CarModel = :m"),
+                        {"q": add_qty, "p": part_name, "m": car_model}
+                    )
+                
+                st.success(f"✅ Added {add_qty} units to {part_name}!")
+                st.rerun() 
 
     with tab2:
-        st.write("Add a brand new part to the inventory database.")
+        st.write("### 🆕 Add New Product to Database")
         with st.form("new_part_form"):
-            new_name = st.text_input("Part Name (e.g., Spark Plug)")
-            new_model = st.text_input("Car Model (e.g., Ford Ranger)")
-            new_price = st.number_input("Selling Price (R)", min_value=0.0, format="%.2f")
-            new_qty = st.number_input("Initial Stock Quantity", min_value=0)
+            col_a, col_b = st.columns(2)
+            with col_a:
+                new_name = st.text_input("Part Name (e.g., Brake Pad)")
+                new_model = st.text_input("Car Model (e.g., VW Polo)")
+            with col_b:
+                new_price = st.number_input("Selling Price (R)", min_value=0.0, format="%.2f")
+                new_qty = st.number_input("Initial Stock Quantity", min_value=0)
             
             submit_new = st.form_submit_button("Add to Inventory")
             
             if submit_new:
-                if new_name == "":
-                    st.error("Please enter a part name.")
+                if new_name == "" or new_model == "":
+                    st.error("Please enter both Part Name and Car Model.")
                 else:
                     with engine.begin() as conn:
                         conn.execute(
                             sa.text("""INSERT INTO Parts (PartName, CarModel, Price, StockQty) 
-                                     VALUES (:n, :m, :p, :q)"""),
+                                       VALUES (:n, :m, :p, :q)"""),
                             {"n": new_name, "m": new_model, "p": new_price, "q": new_qty}
                         )
-                    st.success(f"🚀 {new_name} has been added to the system!")
+                    st.success(f"🚀 {new_name} for {new_model} has been added to the system!")
+                    st.rerun()

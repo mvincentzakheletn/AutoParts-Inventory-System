@@ -11,12 +11,10 @@ params = urllib.parse.quote_plus(
 )
 engine = sa.create_engine(f"mssql+pyodbc:///?odbc_connect={params}")
 
-
 st.set_page_config(page_title="AutoParts Pro Manager", layout="wide")
 st.title("🚗 AutoParts Pro: Management System")
 
-
-menu = ["Inventory View", "Process Sale", "Inventory Management", "Monthly Report"]
+menu = ["Inventory View", "Process Sale", "Inventory Management", "Customer Management", "Monthly Report"]
 choice = st.sidebar.selectbox("Navigation", menu)
 
 if choice == "Inventory View":
@@ -24,43 +22,159 @@ if choice == "Inventory View":
     df = pd.read_sql("SELECT * FROM Parts", engine)
     st.dataframe(df, use_container_width=True)
     
-    
     low_stock = df[df['StockQTY'] < 10]
     if not low_stock.empty:
         st.warning("⚠️ Items requiring restock!")
         st.table(low_stock)
 
 elif choice == "Process Sale":
-    st.subheader("New Transaction")
-    
-    parts_list = pd.read_sql("SELECT PartName FROM Parts", engine)['PartName'].tolist()
-    customers_list = pd.read_sql("SELECT FullName FROM Customers", engine)['FullName'].tolist()
-    
-    col1, col2 = st.columns(2)
+    st.subheader("New Transaction 🛒")
+
+    if 'cart' not in st.session_state:
+        st.session_state['cart'] = []
+
+    customers_df = pd.read_sql("SELECT CustomerID, FullName FROM Customers", engine)
+    parts_df = pd.read_sql("SELECT PartID, PartName, CarModel, StockQTY, Price FROM Parts", engine)
+
+    selected_cust_name = st.selectbox("Select Customer", customers_df['FullName'].tolist())
+    cust_id = customers_df[customers_df['FullName'] == selected_cust_name]['CustomerID'].values[0]
+
+    st.divider()
+
+    col1, col2, col3 = st.columns([2, 2, 1])
+
     with col1:
-        selected_cust = st.selectbox("Select Customer", customers_list)
-        selected_part = st.selectbox("Select Part", parts_list)
+        unique_models = parts_df['CarModel'].unique().tolist()
+        selected_car = st.selectbox("Filter by Car Model", unique_models)
+    
     with col2:
+        filtered_parts = parts_df[parts_df['CarModel'] == selected_car]
+        selected_part_name = st.selectbox("Select Part", filtered_parts['PartName'].tolist())
+    
+    with col3:
         qty = st.number_input("Quantity", min_value=1, value=1)
+
+    if selected_part_name:
+        item_details = filtered_parts[filtered_parts['PartName'] == selected_part_name].iloc[0]
         
-    if st.button("Complete Sale"):
-        with engine.begin() as conn:
-            part_info = conn.execute(sa.text("SELECT PartID, Price, StockQTY FROM Parts WHERE PartName = :p"), {"p": selected_part}).fetchone()
-            cust_info = conn.execute(sa.text("SELECT CustomerID FROM Customers WHERE FullName = :c"), {"c": selected_cust}).fetchone()
-            
-            if part_info[2] >= qty:
-                total_price = float(part_info[1]) * qty
-                conn.execute(sa.text("INSERT INTO Sales (CustomerID, PartsID, QuantitySold, TotalAmount) VALUES (:c, :p, :q, :t)"),
-                             {"c": cust_info[0], "p": part_info[0], "q": qty, "t": total_price})
-                conn.execute(sa.text("UPDATE Parts SET StockQTY = StockQTY - :q WHERE PartID = :p"), {"q": qty, "p": part_info[0]})
-                
-                st.success(f"✅ Sale Processed! Total: R{total_price:,.2f}")
+        price = round(float(item_details['Price']), 2)
+        max_stock = int(item_details['StockQTY'])
+        line_total = round(price * qty, 2)
+
+        st.info(f"💰 **Unit Price:** R{price:,.2f} | **Line Total:** R{line_total:,.2f} | **Available:** {max_stock}")
+
+        if st.button("➕ Add to Cart"):
+            if qty <= max_stock:
+                st.session_state['cart'].append({
+                    "PartID": int(item_details['PartID']),
+                    "PartName": selected_part_name,
+                    "CarModel": selected_car,
+                    "Qty": qty,
+                    "Price": price,
+                    "Total": line_total
+                })
+                st.toast(f"Added {selected_part_name} to cart!")
+                st.rerun()
             else:
-                st.error("❌ Insufficient Stock!")
+                st.error("Not enough stock!")
+
+    st.divider()
+
+    st.write("### 🛒 Current Shopping Cart")
+    if st.session_state['cart']:
+        cart_display = pd.DataFrame(st.session_state['cart'])
+        
+        st.dataframe(
+            cart_display[['PartName', 'CarModel', 'Qty', 'Price', 'Total']],
+            use_container_width=True,
+            column_config={
+                "Price": st.column_config.NumberColumn(format="R %.2f"),
+                "Total": st.column_config.NumberColumn(format="R %.2f")
+            }
+        )
+        
+        grand_total = round(cart_display['Total'].sum(), 2)
+        st.markdown(f"## **Grand Total: :green[R {grand_total:,.2f}]**")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🗑️ Clear Cart"):
+                st.session_state['cart'] = []
+                st.rerun()
+        
+        with c2:
+            if st.button("✅ Complete Sale", type="primary"):
+                try:
+                    with engine.begin() as conn:
+                        for item in st.session_state['cart']:
+                            conn.execute(sa.text(
+                                "UPDATE Parts SET StockQTY = StockQTY - :q WHERE PartID = :p"), 
+                                {"q": item['Qty'], "p": item['PartID']}
+                            )
+                            conn.execute(sa.text(
+                                "INSERT INTO Sales (CustomerID, PartsID, QuantitySold, TotalAmount) VALUES (:c, :p, :q, :t)"),
+                                {"c": int(cust_id), "p": item['PartID'], "q": item['Qty'], "t": item['Total']}
+                            )
+                    
+                    st.session_state['cart'] = [] 
+                    st.success("Successfully processed transaction!")
+                    st.balloons()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Transaction failed: {e}")
+    else:
+        st.info("Your cart is empty.")
+
+elif choice == "Customer Management":
+    st.subheader("👥 Customer Relationship Management")
+    tab1, tab2, tab3 = st.tabs(["View Customers", "Add New Customer", "Remove Customer"])
+
+    with tab1:
+        st.write("### 📇 Active Customer Directory")
+        cust_df = pd.read_sql("SELECT CustomerID, FullName, Email, Phone FROM Customers", engine)
+        st.dataframe(cust_df, use_container_width=True)
+
+    with tab2:
+        st.write("### ➕ Register New Customer")
+        with st.form("add_cust_form"):
+            new_cust_name = st.text_input("Full Name")
+            new_cust_email = st.text_input("Email Address")
+            new_cust_phone = st.text_input("Phone Number")
+            
+            submit_cust = st.form_submit_button("Add Customer")
+            
+            if submit_cust:
+                if new_cust_name == "":
+                    st.error("Full Name is required.")
+                else:
+                    with engine.begin() as conn:
+                        conn.execute(
+                            sa.text("INSERT INTO Customers (FullName, Email, Phone) VALUES (:n, :e, :p)"),
+                            {"n": new_cust_name, "e": new_cust_email, "p": new_cust_phone}
+                        )
+                    st.success(f"✅ {new_cust_name} added successfully!")
+                    st.rerun()
+
+    with tab3:
+        st.write("### 🗑️ Remove Customer Profile")
+        st.warning("Action cannot be undone. Be careful!")
+        
+        cust_list_df = pd.read_sql("SELECT CustomerID, FullName FROM Customers", engine)
+        cust_to_del = st.selectbox("Select Customer to Remove", cust_list_df['FullName'].tolist())
+        
+        if st.button("Delete Customer Permanently"):
+            target_id = cust_list_df[cust_list_df['FullName'] == cust_to_del]['CustomerID'].values[0]
+            
+            try:
+                with engine.begin() as conn:
+                    conn.execute(sa.text("DELETE FROM Customers WHERE CustomerID = :id"), {"id": int(target_id)})
+                st.success(f"🗑️ Record for {cust_to_del} has been deleted.")
+                st.rerun()
+            except Exception as e:
+                st.error("❌ Cannot delete customer because they have existing sales records. You must keep them for audit purposes.")
 
 elif choice == "Monthly Report":
     st.subheader("📊 Financial Overview & Month-End Report")
-    
     report_query = """
         SELECT 
             Parts.PartName, 
@@ -113,7 +227,7 @@ elif choice == "Inventory Management":
     tab1, tab2 = st.tabs(["Restock Existing Item", "Add New Product"])
 
     with tab1:
-        col1, col2 = st.columns([2, 1]) 
+        col1, col2 = st.columns([2, 1])
         
         with col1:
             st.write("### 📋 Current Inventory Overview")
@@ -141,6 +255,7 @@ elif choice == "Inventory Management":
             add_qty = st.number_input("Quantity to Add", min_value=1, value=10)
 
             if st.button("Confirm Restock"):
+                
                 part_name = selected_display_name.split(" (")[0]
                 car_model = selected_display_name.split(" (")[1].replace(")", "")
 
@@ -151,7 +266,7 @@ elif choice == "Inventory Management":
                     )
                 
                 st.success(f"✅ Added {add_qty} units to {part_name}!")
-                st.rerun() 
+                st.rerun()
 
     with tab2:
         st.write("### 🆕 Add New Product to Database")

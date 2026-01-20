@@ -13,26 +13,26 @@ A comprehensive inventory and sales management system for auto parts businesses,
 
 ## 📋 Key Modules:
 
-1. Inventory View  
+### 1. Inventory View  
 Real-time stock monitoring  
 Low stock alerts (<10 units)  
 Search and filter capabilities  
 Export inventory to CSV  
 
-2. Process Sale
+### 2. Process Sale
 Customer selection  
 Product search by name or car model  
 Shopping cart with quantity validation  
 Automatic stock deduction  
 Professional receipt generation  
 
-3. Customer Management
+### 3. Customer Management
 Customer directory  
 Add new customers  
 Customer analytics  
 Safe deletion with audit protection  
 
-4. Reports & Analytics
+### 4. Reports & Analytics
 Monthly profit reports  
 Transaction history  
 Sales trends visualization  
